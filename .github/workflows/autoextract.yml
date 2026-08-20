@@ -1,0 +1,54 @@
+name: CAT'Allo - Auto Extract
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'catallo.zip'
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Vérifier catallo.zip
+        run: |
+          test -f catallo.zip || {
+            echo "catallo.zip introuvable"
+            exit 1
+          }
+
+      - name: Extraire CAT'Allo
+        run: |
+          rm -rf catallo_tmp
+          mkdir catallo_tmp
+          unzip -o catallo.zip -d catallo_tmp
+
+      - name: Copier les fichiers dans le dépôt
+        run: |
+          cp -a catallo_tmp/. .
+          rm -rf catallo_tmp
+
+      - name: Enregistrer les fichiers extraits
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "Aucun changement."
+            exit 0
+          fi
+
+          git commit -m "CAT'Allo - extraction automatique"
+          git push
