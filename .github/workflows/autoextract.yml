@@ -17,23 +17,45 @@ jobs:
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Vérifier catallo.zip
         run: |
-          test -f catallo.zip || {
-            echo "catallo.zip introuvable"
+          if [ ! -f "catallo.zip" ]; then
+            echo "ERREUR : catallo.zip introuvable"
             exit 1
-          }
+          fi
+
+      - name: Préparer l'extraction
+        run: |
+          rm -rf catallo_tmp
+          mkdir -p catallo_tmp
 
       - name: Extraire CAT'Allo
         run: |
-          rm -rf catallo_tmp
-          mkdir catallo_tmp
           unzip -o catallo.zip -d catallo_tmp
 
-      - name: Copier les fichiers dans le dépôt
+      - name: Protéger les workflows GitHub
+        run: |
+          rm -rf catallo_tmp/.github
+
+      - name: Vérifier le projet
+        run: |
+          test -f catallo_tmp/settings.gradle || {
+            echo "ERREUR : settings.gradle introuvable"
+            exit 1
+          }
+
+          test -f catallo_tmp/build.gradle || {
+            echo "ERREUR : build.gradle introuvable"
+            exit 1
+          }
+
+          test -f catallo_tmp/app/build.gradle || {
+            echo "ERREUR : app/build.gradle introuvable"
+            exit 1
+          }
+
+      - name: Copier les fichiers CAT'Allo
         run: |
           cp -a catallo_tmp/. .
           rm -rf catallo_tmp
@@ -46,7 +68,7 @@ jobs:
           git add -A
 
           if git diff --cached --quiet; then
-            echo "Aucun changement."
+            echo "Aucun changement à enregistrer."
             exit 0
           fi
 
