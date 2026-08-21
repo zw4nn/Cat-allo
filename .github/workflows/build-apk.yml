@@ -5,8 +5,9 @@ on:
     branches:
       - main
     paths:
-      - 'alocats.zip'
-      - '.github/workflows/build-apk.yml'
+      - "alocats.zip"
+      - ".github/workflows/build-apk.yml"
+
   workflow_dispatch:
 
 jobs:
@@ -15,62 +16,216 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # -------------------------------------------------------
+      # 1. Récupération du dépôt
+      # -------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v5
 
+      # -------------------------------------------------------
+      # 2. Extraction du projet Alocats
+      # -------------------------------------------------------
       - name: Extract alocats.zip
         shell: bash
         run: |
+          echo "Extraction de alocats.zip..."
+
+          if [ ! -f "alocats.zip" ]; then
+            echo "ERREUR : alocats.zip est introuvable à la racine du dépôt."
+            exit 1
+          fi
+
           rm -rf project
           mkdir -p project
-          unzip -o alocats.zip -d project
-          test -f project/settings.gradle
-          test -f project/build.gradle
-          test -f project/app/build.gradle
-          test -f project/app/src/main/AndroidManifest.xml
 
+          unzip -o alocats.zip -d project
+
+          echo ""
+          echo "Vérification de la structure..."
+
+          test -f project/settings.gradle || {
+            echo "ERREUR : settings.gradle introuvable"
+            exit 1
+          }
+
+          test -f project/build.gradle || {
+            echo "ERREUR : build.gradle introuvable"
+            exit 1
+          }
+
+          test -f project/app/build.gradle || {
+            echo "ERREUR : app/build.gradle introuvable"
+            exit 1
+          }
+
+          test -f project/app/src/main/AndroidManifest.xml || {
+            echo "ERREUR : AndroidManifest.xml introuvable"
+            exit 1
+          }
+
+          echo "Structure du projet OK."
+
+      # -------------------------------------------------------
+      # 3. Java 17
+      # -------------------------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
+      # -------------------------------------------------------
+      # 4. Gradle
+      # -------------------------------------------------------
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: "8.7"
 
-      - name: Read app version
+      # -------------------------------------------------------
+      # 5. Lecture de la version
+      # -------------------------------------------------------
+      - name: Read Alocats version
         working-directory: project
         shell: bash
         run: |
-          VERSION_NAME=$(sed -n "s/.*versionName[[:space:]]*['\"]\([^'\"]*\)['\"].*/\1/p" app/build.gradle | head -n1)
+          VERSION_NAME=$(sed -n \
+            "s/.*versionName[[:space:]]*['\"]\([^'\"]*\)['\"].*/\1/p" \
+            app/build.gradle | head -n1)
+
+          VERSION_CODE=$(sed -n \
+            "s/.*versionCode[[:space:]]*\([0-9]*\).*/\1/p" \
+            app/build.gradle | head -n1)
+
           if [ -z "$VERSION_NAME" ]; then
-            echo "versionName not found"
+            echo "ERREUR : versionName introuvable dans app/build.gradle"
             exit 1
           fi
-          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
-          echo "Alocats version: $VERSION_NAME"
 
-      - name: Build APK
+          if [ -z "$VERSION_CODE" ]; then
+            echo "ERREUR : versionCode introuvable dans app/build.gradle"
+            exit 1
+          fi
+
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
+          echo "========================================"
+          echo "Alocats"
+          echo "Version : $VERSION_NAME"
+          echo "VersionCode : $VERSION_CODE"
+          echo "========================================"
+
+      # -------------------------------------------------------
+      # 6. Compilation
+      # -------------------------------------------------------
+      - name: Build Alocats APK
         working-directory: project
         shell: bash
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+        run: |
+          set +e
 
-      - name: Rename APK
+          echo "========================================"
+          echo "Compilation Alocats ${VERSION_NAME}"
+          echo "========================================"
+
+          gradle :app:assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --console=plain \
+            2>&1 | tee build.log
+
+          BUILD_EXIT=${PIPESTATUS[0]}
+
+          echo ""
+          echo ""
+          echo "============================================================"
+          echo "                 RÉSUMÉ DE COMPILATION"
+          echo "============================================================"
+
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+
+            echo ""
+            echo "❌ LE BUILD A ÉCHOUÉ"
+            echo ""
+            echo "---------------- ERREURS IMPORTANTES ----------------"
+            echo ""
+
+            grep -n \
+              -B 5 \
+              -A 15 \
+              -E \
+              "error:|FAILURE:|What went wrong:|Execution failed for task|cannot find symbol|symbol:|location:|Caused by:.*Exception|Could not resolve|Could not find|Manifest merger failed|AAPT: error|Android resource linking failed" \
+              build.log || true
+
+            echo ""
+            echo "------------------------------------------------------"
+            echo ""
+            echo "Le log complet est disponible dans l'artifact"
+            echo "'alocats-build-log'."
+            echo ""
+            echo "============================================================"
+
+            exit "$BUILD_EXIT"
+
+          else
+
+            echo ""
+            echo "✅ BUILD RÉUSSI"
+            echo ""
+            echo "Alocats ${VERSION_NAME}"
+            echo "VersionCode ${VERSION_CODE}"
+            echo ""
+            echo "============================================================"
+
+          fi
+
+      # -------------------------------------------------------
+      # 7. Conservation du log même si le build plante
+      # -------------------------------------------------------
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: alocats-build-log
+          path: project/build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # -------------------------------------------------------
+      # 8. Recherche et renommage de l'APK
+      # -------------------------------------------------------
+      - name: Prepare APK
+        if: success()
         shell: bash
         run: |
-          APK=$(find project/app/build/outputs/apk/debug -name "*.apk" | head -n1)
+          APK=$(find project/app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            | head -n1)
+
           if [ -z "$APK" ]; then
-            echo "APK not found"
+            echo "ERREUR : aucun APK généré."
             exit 1
           fi
-          cp "$APK" "alocats-${VERSION_NAME}.apk"
 
-      - name: Upload APK
+          OUTPUT="alocats-${VERSION_NAME}.apk"
+
+          cp "$APK" "$OUTPUT"
+
+          echo "APK généré : $OUTPUT"
+          echo "APK_PATH=$OUTPUT" >> "$GITHUB_ENV"
+
+          ls -lh "$OUTPUT"
+
+      # -------------------------------------------------------
+      # 9. Publication de l'APK dans les artifacts GitHub
+      # -------------------------------------------------------
+      - name: Upload Alocats APK
+        if: success()
         uses: actions/upload-artifact@v5
         with:
           name: alocats-${{ env.VERSION_NAME }}
-          path: alocats-${{ env.VERSION_NAME }}.apk
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
-          
+          retention-days: 30
